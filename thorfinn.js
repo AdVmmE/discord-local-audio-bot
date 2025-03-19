@@ -5,6 +5,7 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSta
 const path = require('path');
 const fs = require('fs');
 const readline = require('readline'); // For terminal input
+const gTTS = require('gtts'); // For text-to-speech
 
 const ffmpegPath = require('ffmpeg-static');
 createAudioResource.ffmpeg = ffmpegPath;
@@ -30,21 +31,24 @@ const rl = readline.createInterface({
   output: process.stdout,
 });
 
-client.once('ready', () => {
-  console.log(`
- █████╗ ██████╗ ██╗   ██╗██╗  ██╗███╗   ███╗
-██╔══██╗██╔══██╗██║   ██║╚██╗██╔╝████╗ ████║
-███████║██║  ██║██║   ██║ ╚███╔╝ ██╔████╔██║
-██╔══██║██║  ██║╚██╗ ██╔╝ ██╔██╗ ██║╚██╔╝██║
-██║  ██║██████╔╝ ╚████╔╝ ██╔╝ ██╗██║ ╚═╝ ██║
-╚═╝  ╚═╝╚═════╝   ╚═══╝  ╚═╝  ╚═╝╚═╝     ╚═╝
-                                            
-Bot is s online!
-U can now type commands in the terminal (e.g., !dm <user_id> <message>, !play <filename>)
-  `);
+// Simulated message object for terminal commands
+const createTerminalMessage = (content) => ({
+  content,
+  author: { bot: false, send: console.log },
+  reply: console.log,
+  member: { voice: { channel: null } },
+  guild: client.guilds.cache.first(),
 });
+
 const playAudio = async (filePath, message) => {
   try {
+    // Check if the file exists before proceeding
+    if (!fs.existsSync(filePath)) {
+      console.error(`File not found: ${filePath}`);
+      if (message) message.reply(`File not found: ${path.basename(filePath)}`);
+      return;
+    }
+
     console.log('Creating audio player...');
     player = createAudioPlayer();
 
@@ -91,13 +95,18 @@ const playAudio = async (filePath, message) => {
   }
 };
 
-// Simulated message object for terminal commands
-const createTerminalMessage = (content) => ({
-  content,
-  author: { bot: false, send: console.log }, 
-  reply: console.log, 
-  member: { voice: { channel: null } }, 
-  guild: client.guilds.cache.first(), 
+client.once('ready', () => {
+  console.log(`
+ █████╗ ██████╗ ██╗   ██╗██╗  ██╗███╗   ███╗
+██╔══██╗██╔══██╗██║   ██║╚██╗██╔╝████╗ ████║
+███████║██║  ██║██║   ██║ ╚███╔╝ ██╔████╔██║
+██╔══██║██║  ██║╚██╗ ██╔╝ ██╔██╗ ██║╚██╔╝██║
+██║  ██║██████╔╝ ╚████╔╝ ██╔╝ ██╗██║ ╚═╝ ██║
+╚═╝  ╚═╝╚═════╝   ╚═══╝  ╚═╝  ╚═╝╚═╝     ╚═╝
+                                            
+Bot is s online!
+U can now type commands in the terminal (e.g., !dm <user_id> <message>, !play <filename>)
+  `);
 });
 
 client.on('messageCreate', async (message) => {
@@ -137,33 +146,32 @@ const handleCommand = async (command, args, message) => {
 
   if (command === 'join') {
     let channelId;
-  
-    // Check if a channel ID is provided 
+
     if (args.length > 0) {
       channelId = args[0];
     } else if (message.member.voice.channel) {
-      channelId = message.member.voice.channel.id; // Use Discord voice channel if available
+      channelId = message.member.voice.channel.id;
     } else {
       return message.reply('Please provide a channel ID (e.g., !join 994814288441126912) or join a voice channel in Discord first!');
     }
-  
+
     if (connection) {
       return message.reply('I’m already in a voice channel!');
     }
-  
+
     try {
       console.log('Joining voice channel...');
-      const guild = client.guilds.cache.first(); 
+      const guild = client.guilds.cache.first();
       if (!guild) {
         return message.reply('Bot is not in any guild! Please provide a guild ID or invite the bot to a server.');
       }
-  
+
       connection = joinVoiceChannel({
         channelId: channelId,
         guildId: guild.id,
         adapterCreator: guild.voiceAdapterCreator,
       });
-  
+
       await new Promise((resolve, reject) => {
         connection.on(VoiceConnectionStatus.Ready, () => {
           console.log('Connection is ready!');
@@ -175,7 +183,7 @@ const handleCommand = async (command, args, message) => {
           reject(error);
         });
       });
-  
+
     } catch (error) {
       console.error('Join error:', error);
       message.reply('Failed to join the voice channel. Check the channel ID or bot permissions.');
@@ -185,6 +193,7 @@ const handleCommand = async (command, args, message) => {
       }
     }
   }
+
   if (command === 'play') {
     if (!args.length) return message.reply('Please provide a filename! (e.g., !play song.mp3)');
     const filename = args[0];
@@ -245,7 +254,67 @@ rl.on('line', async (input) => {
   const args = input.slice(prefix.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
   const simulatedMessage = createTerminalMessage(input);
-  await handleCommand(command, args, simulatedMessage);
+
+  if (command === 'speak') {
+    const textToSpeak = args.join(' ');
+    if (!textToSpeak) {
+      console.log('Please provide something to say! (e.g., !speak Hello everyone)');
+      return;
+    }
+
+    if (!connection) {
+      console.log('Please use !join first or join a voice channel in Discord!');
+      return;
+    }
+
+    try {
+      // Generate a unique temporary file path for the TTS audio
+      const tempFilePath = path.join(process.env.AUDIO_DIRECTORY, `tts_${Date.now()}.mp3`);
+
+      // Convert text to speech using gTTS
+      await new Promise((resolve, reject) => {
+        const tts = new gTTS(textToSpeak, 'ar'); // 'en' for English; change to other languages if desired
+        tts.save(tempFilePath, (err) => {
+          if (err) {
+            console.error('TTS generation error:', err);
+            reject(err);
+          } else {
+            console.log(`TTS audio saved to ${tempFilePath}`);
+            resolve();
+          }
+        });
+      });
+
+      // Temporarily disable looping for TTS audio
+      const originalIsLooping = isLooping;
+      isLooping = false;
+
+      // Play the generated audio
+      currentFilePath = tempFilePath;
+      await playAudio(tempFilePath, simulatedMessage);
+
+      // Clean up
+      player.on(AudioPlayerStatus.Idle, () => {
+        console.log('Cleaning up temporary TTS file...');
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+          console.log(`Deleted ${tempFilePath}`);
+        }
+        // Restore the original looping state
+        isLooping = originalIsLooping;
+      });
+
+    } catch (error) {
+      console.error('Speak command error:', error);
+      console.log('Failed to generate or play the speech.');
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath); // Clean up in case of error
+      }
+    }
+  } else {
+    // Handle other terminal commands (e.g., !dm, !join, etc.)
+    await handleCommand(command, args, simulatedMessage);
+  }
 });
 
 const audioDirectory = process.env.AUDIO_DIRECTORY;
