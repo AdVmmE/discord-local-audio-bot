@@ -4,6 +4,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice');
 const path = require('path');
 const fs = require('fs');
+const readline = require('readline'); // For terminal input
 
 const ffmpegPath = require('ffmpeg-static');
 createAudioResource.ffmpeg = ffmpegPath;
@@ -23,10 +24,25 @@ let player = null;
 let currentFilePath = null;
 let isLooping = true;
 
-client.once('ready', () => {
-  console.log('Bot is online!');
+// Set up terminal input
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
 });
 
+client.once('ready', () => {
+  console.log(`
+ █████╗ ██████╗ ██╗   ██╗██╗  ██╗███╗   ███╗
+██╔══██╗██╔══██╗██║   ██║╚██╗██╔╝████╗ ████║
+███████║██║  ██║██║   ██║ ╚███╔╝ ██╔████╔██║
+██╔══██║██║  ██║╚██╗ ██╔╝ ██╔██╗ ██║╚██╔╝██║
+██║  ██║██████╔╝ ╚████╔╝ ██╔╝ ██╗██║ ╚═╝ ██║
+╚═╝  ╚═╝╚═════╝   ╚═══╝  ╚═╝  ╚═╝╚═╝     ╚═╝
+                                            
+Bot is s online!
+U can now type commands in the terminal (e.g., !dm <user_id> <message>, !play <filename>)
+  `);
+});
 const playAudio = async (filePath, message) => {
   try {
     console.log('Creating audio player...');
@@ -75,57 +91,83 @@ const playAudio = async (filePath, message) => {
   }
 };
 
+// Simulated message object for terminal commands
+const createTerminalMessage = (content) => ({
+  content,
+  author: { bot: false, send: console.log }, 
+  reply: console.log, 
+  member: { voice: { channel: null } }, 
+  guild: client.guilds.cache.first(), 
+});
+
 client.on('messageCreate', async (message) => {
   if (!message.content.startsWith(prefix) || message.author.bot) return;
 
   const args = message.content.slice(prefix.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
+  await handleCommand(command, args, message);
+});
 
+// Handle commands
+const handleCommand = async (command, args, message) => {
   if (command === 'dm') {
-    const user = message.mentions.users.first();
+    const userId = args[0];
     const dmMessage = args.slice(1).join(' ');
 
-    if (!user) return message.reply('Please mention a user to DM!');
+    if (!userId) return message.reply('Please provide a user ID to DM!');
     if (!dmMessage) return message.reply('Please provide a message to send!');
 
     try {
-      await user.send(`📩 **Message from ${message.author.username}:** ${dmMessage}`);
-      message.reply('✅ Message sent successfully!');
+      const user = await client.users.fetch(userId);
+      await user.send(dmMessage);
+      message.reply('Message sent successfully!');
     } catch (error) {
       console.error('DM Error:', error);
-      message.reply("❌ I couldn't send the DM! The user may have DMs disabled.");
+      message.reply("I couldn't send the DM! Check the user ID or their DM settings.");
     }
   }
 
   if (command === 'chat') {
     const chatMessage = args.join(' ');
 
-    if (!chatMessage) return message.author.send('💬 Please enter a message to chat!').catch(() => message.reply("I couldn't DM you!"));
-    message.author.send(`🤖 **Bot Reply:** I received your message: "${chatMessage}"`)
+    if (!chatMessage) return message.author.send('Please enter a message to chat!').catch(() => message.reply("I couldn't DM you!"));
+    message.author.send(chatMessage)
       .catch(() => message.reply("I couldn't DM you! Please check your settings."));
   }
 
   if (command === 'join') {
-    if (!message.member.voice.channel) {
-      return message.reply('You need to join a voice channel first!');
+    let channelId;
+  
+    // Check if a channel ID is provided 
+    if (args.length > 0) {
+      channelId = args[0];
+    } else if (message.member.voice.channel) {
+      channelId = message.member.voice.channel.id; // Use Discord voice channel if available
+    } else {
+      return message.reply('Please provide a channel ID (e.g., !join 994814288441126912) or join a voice channel in Discord first!');
     }
-
+  
     if (connection) {
       return message.reply('I’m already in a voice channel!');
     }
-
+  
     try {
       console.log('Joining voice channel...');
+      const guild = client.guilds.cache.first(); 
+      if (!guild) {
+        return message.reply('Bot is not in any guild! Please provide a guild ID or invite the bot to a server.');
+      }
+  
       connection = joinVoiceChannel({
-        channelId: message.member.voice.channel.id,
-        guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
+        channelId: channelId,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
       });
-
+  
       await new Promise((resolve, reject) => {
         connection.on(VoiceConnectionStatus.Ready, () => {
           console.log('Connection is ready!');
-          message.reply('Joined the voice channel!');
+          message.reply(`Joined voice channel with ID: ${channelId}!`);
           resolve();
         });
         connection.on('error', (error) => {
@@ -133,24 +175,19 @@ client.on('messageCreate', async (message) => {
           reject(error);
         });
       });
-
+  
     } catch (error) {
       console.error('Join error:', error);
-      message.reply('Failed to join the voice channel.');
+      message.reply('Failed to join the voice channel. Check the channel ID or bot permissions.');
       if (connection) {
         connection.destroy();
         connection = null;
       }
     }
   }
-
   if (command === 'play') {
     if (!args.length) return message.reply('Please provide a filename! (e.g., !play song.mp3)');
     const filename = args[0];
-
-    if (!message.member.voice.channel) {
-      return message.reply('You need to join a voice channel first!');
-    }
 
     const filePath = path.join(process.env.AUDIO_DIRECTORY, filename);
     if (!fs.existsSync(filePath)) {
@@ -159,23 +196,7 @@ client.on('messageCreate', async (message) => {
 
     try {
       if (!connection) {
-        console.log('Joining voice channel...');
-        connection = joinVoiceChannel({
-          channelId: message.member.voice.channel.id,
-          guildId: message.guild.id,
-          adapterCreator: message.guild.voiceAdapterCreator,
-        });
-
-        await new Promise((resolve, reject) => {
-          connection.on(VoiceConnectionStatus.Ready, () => {
-            console.log('Connection is ready!');
-            resolve();
-          });
-          connection.on('error', (error) => {
-            console.error('Connection error:', error);
-            reject(error);
-          });
-        });
+        return message.reply('Please use !join first or join a voice channel in Discord!');
       }
 
       if (player) {
@@ -187,7 +208,7 @@ client.on('messageCreate', async (message) => {
 
     } catch (error) {
       console.error('Setup error:', error);
-      message.reply('Failed to join voice channel or start playback.');
+      message.reply('Failed to start playback.');
       if (connection) {
         connection.destroy();
         connection = null;
@@ -215,6 +236,16 @@ client.on('messageCreate', async (message) => {
     }
     message.reply(`Available audio files:\n${files.join('\n')}`);
   }
+};
+
+// Terminal command listener
+rl.on('line', async (input) => {
+  if (!input.startsWith(prefix)) return;
+
+  const args = input.slice(prefix.length).trim().split(/ +/);
+  const command = args.shift().toLowerCase();
+  const simulatedMessage = createTerminalMessage(input);
+  await handleCommand(command, args, simulatedMessage);
 });
 
 const audioDirectory = process.env.AUDIO_DIRECTORY;
