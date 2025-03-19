@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const readline = require('readline'); // For terminal input
 const gTTS = require('gtts'); // For text-to-speech
+const axios = require('axios'); // For HTTP streaming
 
 const ffmpegPath = require('ffmpeg-static');
 createAudioResource.ffmpeg = ffmpegPath;
@@ -22,7 +23,7 @@ const client = new Client({
 const prefix = '!';
 let connection = null;
 let player = null;
-let currentFilePath = null;
+let currentStream = null; // To store the current stream URL for looping
 let isLooping = true;
 
 // Set up terminal input
@@ -40,20 +41,33 @@ const createTerminalMessage = (content) => ({
   guild: client.guilds.cache.first(),
 });
 
-const playAudio = async (filePath, message) => {
+const playAudio = async (source, message, isUrl = false) => {
   try {
-    // Check if the file exists before proceeding
-    if (!fs.existsSync(filePath)) {
-      console.error(`File not found: ${filePath}`);
-      if (message) message.reply(`File not found: ${path.basename(filePath)}`);
-      return;
-    }
-
     console.log('Creating audio player...');
     player = createAudioPlayer();
 
-    console.log('Creating audio resource from:', filePath);
-    const resource = createAudioResource(filePath);
+    let resource;
+    if (isUrl) {
+      // Stream from a URL using axios
+      console.log('Streaming audio from URL:', source);
+      const response = await axios({
+        method: 'get',
+        url: source,
+        responseType: 'stream',
+      });
+      resource = createAudioResource(response.data, {
+        inlineVolume: true, // Enable volume control (optional)
+      });
+    } else {
+      // If source is a local file path
+      if (!fs.existsSync(source)) {
+        console.error(`File not found: ${source}`);
+        if (message) message.reply(`File not found: ${path.basename(source)}`);
+        return;
+      }
+      console.log('Creating audio resource from:', source);
+      resource = createAudioResource(source);
+    }
     console.log('Audio resource created:', resource.playbackDuration);
 
     console.log('Playing resource...');
@@ -65,6 +79,7 @@ const playAudio = async (filePath, message) => {
       console.log('Subscription successful');
     } else {
       console.log('Subscription failed');
+      return;
     }
 
     player.on('stateChange', (oldState, newState) => {
@@ -73,14 +88,20 @@ const playAudio = async (filePath, message) => {
 
     player.on(AudioPlayerStatus.Playing, () => {
       console.log('Audio is playing!');
-      if (message) message.reply(`Now playing: ${path.basename(filePath)}`);
+      if (message) {
+        if (isUrl) {
+          message.reply(`Now streaming from URL: ${source}`);
+        } else {
+          message.reply(`Now playing: ${path.basename(source)}`);
+        }
+      }
     });
 
     player.on(AudioPlayerStatus.Idle, () => {
       console.log('Audio finished playing');
-      if (isLooping && currentFilePath) {
+      if (isLooping && currentStream) {
         console.log('Looping audio...');
-        playAudio(currentFilePath); // Loop the same file
+        playAudio(currentStream, null, true); // Loop the stream
       }
     });
 
@@ -234,6 +255,7 @@ const handleCommand = async (command, args, message) => {
     connection.destroy();
     connection = null;
     currentFilePath = null;
+    currentStream = null;
     message.reply('Stopped the audio and left the channel.');
   }
 
@@ -273,7 +295,7 @@ rl.on('line', async (input) => {
 
       // Convert text to speech using gTTS
       await new Promise((resolve, reject) => {
-        const tts = new gTTS(textToSpeak, 'ar'); // 'en' for English; change to other languages if desired
+        const tts = new gTTS(textToSpeak, 'ar'); // Arabic voice
         tts.save(tempFilePath, (err) => {
           if (err) {
             console.error('TTS generation error:', err);
@@ -310,6 +332,37 @@ rl.on('line', async (input) => {
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath); // Clean up in case of error
       }
+    }
+  } else if (command === 'music') {
+    const musicUrl = args.join(' '); // Join args to handle spaces in URLs
+    if (!musicUrl) {
+      console.log('Please provide a direct MP3 URL! (e.g., !music https://www.kozco.com/tech/piano2.mp3)');
+      return;
+    }
+
+    if (!musicUrl.startsWith('http://') && !musicUrl.startsWith('https://')) {
+      console.log('Please provide a valid URL starting with http:// or https://');
+      return;
+    }
+
+    if (!connection) {
+      console.log('Please use !join first or join a voice channel in Discord!');
+      return;
+    }
+
+    try {
+      // Stop any currently playing audio
+      if (player) {
+        player.stop();
+      }
+
+      // Play the stream
+      currentStream = musicUrl;
+      await playAudio(musicUrl, simulatedMessage, true);
+
+    } catch (error) {
+      console.error('Music command error:', error);
+      console.log('Failed to stream the music. Make sure the URL is a direct link to an MP3 file and is accessible.');
     }
   } else {
     // Handle other terminal commands (e.g., !dm, !join, etc.)
