@@ -16,7 +16,6 @@ class Song {
 
   static async from(input: string): Promise<Song> {
     try {
-      // Check if the input is a valid YouTube URL
       if (ytdl.validateURL(input)) {
         const info = await ytdl.getInfo(input);
         return new Song(info.videoDetails.title, input);
