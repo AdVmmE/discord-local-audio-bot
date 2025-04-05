@@ -1,3 +1,4 @@
+//---ADVXM--
 require('dotenv').config(); // Load environment variables from .env file
 
 const { Client, GatewayIntentBits } = require('discord.js');
